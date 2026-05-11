@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 PYTHON_BIN="${PYTHON:-python3}"
-CUDA_ARCH="${CUDA_ARCH:-sm_86}"
+CUDA_ARCH="${CUDA_ARCH:-auto}"
 
 if [[ "$(uname -s)" != "Linux" ]]; then
   echo "This installer is for Linux. Use install_macos.sh on macOS."

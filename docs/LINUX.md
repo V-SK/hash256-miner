@@ -25,13 +25,17 @@ If the install script cannot find `hash_gpu_cuda` and cannot find `nvcc`, instal
 
 ## Build Locally
 
-Use the CUDA arch that matches your GPU. The default is `sm_86`, which is suitable for Ampere cards such as RTX 30 series.
+Use the CUDA arch that matches your GPU. The build script auto-detects the first NVIDIA GPU when possible:
+
+```bash
+./scripts/build_cuda_linux.sh
+```
+
+Override manually when needed:
 
 ```bash
 CUDA_ARCH=sm_86 ./scripts/build_cuda_linux.sh
 ```
-
-Examples:
 
 ```bash
 CUDA_ARCH=sm_75 ./scripts/build_cuda_linux.sh   # Turing / RTX 20
@@ -44,6 +48,49 @@ Then run:
 
 ```bash
 ./scripts/run_miner.sh 0xYourPayoutAddress --backend cuda
+```
+
+## Linux Performance Tuning
+
+The CUDA kernel is the same register-resident v2 kernel used by the Windows CUDA build. On Linux, the biggest wins usually come from native architecture compilation and stable GPU clocks.
+
+Dry-run safe tuning commands:
+
+```bash
+./scripts/tune_linux_nvidia.sh
+```
+
+Apply safe tuning:
+
+```bash
+./scripts/tune_linux_nvidia.sh --apply
+```
+
+Optional power and clock controls:
+
+```bash
+./scripts/tune_linux_nvidia.sh --apply --power-limit 320
+./scripts/tune_linux_nvidia.sh --apply --lock-graphics-clock 2500
+./scripts/tune_linux_nvidia.sh --apply --unlock-clocks
+```
+
+Only use power/clock values that your card supports. Consumer GeForce cards may reject some clock commands; that is normal.
+
+Benchmark a Linux host and pick the best parameters:
+
+```bash
+BENCH_SECONDS=30 ./scripts/benchmark_linux_cuda.sh
+```
+
+The script writes a CSV and prints the top configurations. Use the winning row as:
+
+```bash
+python3 hash_miner.py --address 0xYourPayoutAddress \
+  --backend cuda \
+  --batch 33554432 \
+  --iters 8 \
+  --group 256 \
+  --streams 2
 ```
 
 ## Doctor
