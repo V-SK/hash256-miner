@@ -34,9 +34,10 @@ CUDA_BIN_NAMES = ["hash_gpu_cuda", "hash_gpu_cuda.exe"]
 MINER_VERSION = "hash-miner/0.1"
 POOL_FEE_PERCENT = 2
 DEFAULT_POOL_URL = os.environ.get("SYNTH_MINER_POOL_URL", "https://synth-miner.vercel.app/api/pool")
-DEFAULT_METAL_BATCH = 1 << 23
-DEFAULT_METAL_ITERS = 8
-DEFAULT_METAL_GROUP = 64
+DEFAULT_METAL_BATCH = 1 << 25
+DEFAULT_METAL_ITERS = 16
+DEFAULT_METAL_GROUP = 256
+DEFAULT_METAL_INFLIGHT = 16
 DEFAULT_CUDA_BATCH = 33_554_432
 DEFAULT_CUDA_ITERS = 8
 DEFAULT_CUDA_GROUP = 256
@@ -546,7 +547,7 @@ def main() -> int:
     parser.add_argument("--backend", choices=["auto", "metal", "cuda"], default="auto")
     parser.add_argument("--gpus", default="all", help="'all' or comma-separated CUDA GPU indexes. Metal MVP uses one device.")
     parser.add_argument("--rounds", type=int, default=0)
-    parser.add_argument("--slice-seconds", type=float, default=30.0)
+    parser.add_argument("--slice-seconds", type=float, default=120.0)
     parser.add_argument("--miner-token", default=os.environ.get("HASH_POOL_MINER_TOKEN"))
     parser.add_argument("--doctor", action="store_true", help="Check runtime dependencies and exit without mining.")
     parser.add_argument("--check-only", action="store_true", help="Alias for --doctor.")
@@ -563,7 +564,7 @@ def main() -> int:
     parser.add_argument("--batch", type=int, help="Override backend batch size. CUDA default is tuned separately from Metal.")
     parser.add_argument("--iters", type=int, help="Override backend iterations per thread.")
     parser.add_argument("--group", type=int, help="Override backend thread group/block size.")
-    parser.add_argument("--inflight", type=int, default=2)
+    parser.add_argument("--inflight", type=int, default=DEFAULT_METAL_INFLIGHT)
     parser.add_argument("--streams", type=int, help="CUDA async stream count. Default 2.")
     args = parser.parse_args()
 
