@@ -23,11 +23,11 @@ from hash_pool_miner import (
     parse_checked,
     parse_rate,
     parse_record,
-    read_json,
+    read_job_with_session_recovery,
     register_worker,
     sanitized_response,
     lease_nonce_count,
-    submit_record,
+    submit_record_with_session_recovery,
 )
 
 
@@ -127,10 +127,13 @@ def main() -> int:
 
     try:
         while args.rounds == 0 or rounds_done < args.rounds:
-            job = read_json(job_url(args), args.miner_token, args.worker_session)
+            job, session_recovered = read_job_with_session_recovery(args)
             if job.get("status") != "ok":
                 raise RuntimeError(f"pool rejected job request: {job}")
             job_id = int(job["job_id"])
+            if session_recovered:
+                last_job_id = None
+                next_start = None
             if job_id != last_job_id or next_start is None:
                 lease = job.get("lease")
                 next_start = int(lease["start_nonce"]) if isinstance(lease, dict) and "start_nonce" in lease else int(job["nonce_start"])
@@ -159,7 +162,18 @@ def main() -> int:
             if rc not in (0, 1):
                 raise RuntimeError("CUDA runner returned an error")
             if record is not None:
-                response = submit_record(args, job, record, checked, rate)
+                response, session_recovered = submit_record_with_session_recovery(args, job, record, checked, rate)
+                if session_recovered:
+                    print(
+                        "pool_submit_recovery: "
+                        f"reason={response.get('reason')} record={record['kind']} "
+                        "action=renewed_session_dropped_stale_record"
+                    )
+                    last_job_id = None
+                    next_start = None
+                    rounds_done += 1
+                    sys.stdout.flush()
+                    continue
                 if args.debug_output:
                     print(f"pool_{record['kind'].lower()}_response: {json.dumps(response, sort_keys=True)}")
                 else:

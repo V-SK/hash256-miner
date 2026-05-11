@@ -26,12 +26,35 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent
 DEFAULT_METAL_BIN = ROOT / "hash_gpu_metal"
 DEFAULT_POOL_URL = os.environ.get("SYNTH_MINER_POOL_URL", "https://synth-miner.vercel.app/api/pool")
+RECOVERABLE_SESSION_REASONS = {
+    "expired_worker_session",
+    "invalid_worker_session",
+    "missing_worker_session",
+}
 CHECKED_RE = re.compile(r"checked:\s+([0-9,]+)")
 RATE_RE = re.compile(r"rate:\s+([0-9,]+)\s+H/s")
 RECORD_RE = re.compile(r"^(FOUND|SHARE)$", re.MULTILINE)
 NONCE_RE = re.compile(r"nonce:\s+(\d+)")
 DIGEST_RE = re.compile(r"digest:\s+(0x[0-9a-fA-F]{64})")
 CALLDATA_RE = re.compile(r"calldata:\s+(0x[0-9a-fA-F]+)")
+
+
+class PoolHTTPError(RuntimeError):
+    def __init__(self, status_code: int, body: str):
+        self.status_code = status_code
+        self.body = body
+        self.payload: dict[str, Any] | None = None
+        self.reason: str | None = None
+        try:
+            parsed = json.loads(body)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            self.payload = parsed
+            reason = parsed.get("reason")
+            if isinstance(reason, str):
+                self.reason = reason
+        super().__init__(f"pool HTTP {status_code}: {body}")
 
 
 def auth_headers(token: str | None = None, worker_session: str | None = None) -> dict[str, str]:
@@ -50,7 +73,7 @@ def read_json(url: str, token: str | None = None, worker_session: str | None = N
             data = json.loads(res.read())
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"pool HTTP {exc.code}: {body}") from exc
+        raise PoolHTTPError(exc.code, body) from exc
     if not isinstance(data, dict):
         raise RuntimeError("pool returned non-object JSON")
     return data
@@ -76,10 +99,18 @@ def post_json(
             data = json.loads(res.read())
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"pool HTTP {exc.code}: {body}") from exc
+        raise PoolHTTPError(exc.code, body) from exc
     if not isinstance(data, dict):
         raise RuntimeError("pool returned non-object JSON")
     return data
+
+
+def is_recoverable_session_error(exc: BaseException) -> bool:
+    return (
+        isinstance(exc, PoolHTTPError)
+        and exc.status_code == 403
+        and exc.reason in RECOVERABLE_SESSION_REASONS
+    )
 
 
 def parse_checked(output: str) -> int | None:
@@ -143,6 +174,24 @@ def register_worker(args: argparse.Namespace) -> dict[str, Any]:
     args.worker_id = int(response["worker_id"])
     args.worker_session = str(response["worker_session"])
     return response
+
+
+def recover_worker_session(args: argparse.Namespace, reason: str | None) -> dict[str, Any]:
+    response = register_worker(args)
+    args.submit_sequence = 0
+    print(f"worker_session_recovered: reason={reason or 'unknown'} new_worker_id={args.worker_id} session=issued")
+    sys.stdout.flush()
+    return response
+
+
+def read_job_with_session_recovery(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
+    try:
+        return read_json(job_url(args), args.miner_token, args.worker_session), False
+    except PoolHTTPError as exc:
+        if not is_recoverable_session_error(exc):
+            raise
+        recover_worker_session(args, exc.reason)
+        return read_json(job_url(args), args.miner_token, args.worker_session), True
 
 
 def close_worker(args: argparse.Namespace) -> None:
@@ -247,6 +296,27 @@ def submit_record(args: argparse.Namespace, job: dict[str, Any], record: dict[st
     raise RuntimeError(f"unknown miner record kind: {record['kind']}")
 
 
+def submit_record_with_session_recovery(
+    args: argparse.Namespace,
+    job: dict[str, Any],
+    record: dict[str, Any],
+    checked: int | None,
+    rate: int | None,
+) -> tuple[dict[str, Any], bool]:
+    try:
+        return submit_record(args, job, record, checked, rate), False
+    except PoolHTTPError as exc:
+        if not is_recoverable_session_error(exc):
+            raise
+        recover_worker_session(args, exc.reason)
+        return {
+            "status": "recovered",
+            "reason": exc.reason,
+            "counted": False,
+            "worker_id": args.worker_id,
+        }, True
+
+
 def sanitized_response(kind: str, response: dict[str, Any]) -> dict[str, Any]:
     out = {
         "status": response.get("status"),
@@ -316,10 +386,13 @@ def main() -> int:
 
     try:
         while args.rounds == 0 or rounds_done < args.rounds:
-            job = read_json(job_url(args), args.miner_token, args.worker_session)
+            job, session_recovered = read_job_with_session_recovery(args)
             if job.get("status") != "ok":
                 raise RuntimeError(f"pool rejected job request: {job}")
             job_id = int(job["job_id"])
+            if session_recovered:
+                last_job_id = None
+                next_start = None
             if job_id != last_job_id or next_start is None:
                 lease = job.get("lease")
                 next_start = int(lease["start_nonce"]) if isinstance(lease, dict) and "start_nonce" in lease else int(job["nonce_start"])
@@ -347,7 +420,18 @@ def main() -> int:
             if rc == 2:
                 raise RuntimeError("Metal runner returned an error")
             if record is not None:
-                response = submit_record(args, job, record, checked, rate)
+                response, session_recovered = submit_record_with_session_recovery(args, job, record, checked, rate)
+                if session_recovered:
+                    print(
+                        "pool_submit_recovery: "
+                        f"reason={response.get('reason')} record={record['kind']} "
+                        "action=renewed_session_dropped_stale_record"
+                    )
+                    last_job_id = None
+                    next_start = None
+                    rounds_done += 1
+                    sys.stdout.flush()
+                    continue
                 if args.debug_output:
                     print(f"pool_{record['kind'].lower()}_response: {json.dumps(response, sort_keys=True)}")
                 else:
