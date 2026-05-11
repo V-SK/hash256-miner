@@ -16,9 +16,24 @@ function Run-Python {
   }
 }
 
+function Get-VenvPython {
+  $candidates = @(
+    ".\.venv\Scripts\python.exe",
+    ".\.venv\bin\python.exe",
+    ".\.venv\bin\python"
+  )
+  foreach ($candidate in $candidates) {
+    if (Test-Path $candidate) {
+      return $candidate
+    }
+  }
+  throw "venv python not found under .venv"
+}
+
 Run-Python @("-m", "venv", ".venv")
-& .\.venv\Scripts\python.exe -m pip install --upgrade pip
-& .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+$VenvPython = Get-VenvPython
+& $VenvPython -m pip install --upgrade pip
+& $VenvPython -m pip install -r requirements.txt
 
 if (-not (Test-Path ".\hash_gpu_cuda.exe")) {
   $nvcc = Get-Command nvcc.exe -ErrorAction SilentlyContinue
@@ -30,4 +45,4 @@ if (-not (Test-Path ".\hash_gpu_cuda.exe")) {
   }
 }
 
-& .\.venv\Scripts\python.exe .\hash_miner.py --doctor --backend cuda
+& $VenvPython .\hash_miner.py --doctor --backend cuda
