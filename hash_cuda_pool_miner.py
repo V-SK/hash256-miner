@@ -26,6 +26,7 @@ from hash_pool_miner import (
     read_json,
     register_worker,
     sanitized_response,
+    lease_nonce_count,
     submit_record,
 )
 
@@ -67,6 +68,9 @@ def run_cuda(args: argparse.Namespace, job: dict[str, object], start: int) -> tu
         "--kernel",
         args.kernel,
     ]
+    total = lease_nonce_count(job)
+    if total is not None:
+        cmd.extend(["--total", str(total)])
     proc = subprocess.run(cmd, text=True, capture_output=True)
     return proc.returncode, proc.stdout + proc.stderr
 

@@ -17,6 +17,7 @@ import subprocess
 import sys
 import time
 import urllib.parse
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -44,8 +45,12 @@ def auth_headers(token: str | None = None, worker_session: str | None = None) ->
 
 def read_json(url: str, token: str | None = None, worker_session: str | None = None) -> dict[str, Any]:
     req = urllib.request.Request(url, headers=auth_headers(token, worker_session))
-    with urllib.request.urlopen(req, timeout=30) as res:
-        data = json.loads(res.read())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as res:
+            data = json.loads(res.read())
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"pool HTTP {exc.code}: {body}") from exc
     if not isinstance(data, dict):
         raise RuntimeError("pool returned non-object JSON")
     return data
@@ -66,8 +71,12 @@ def post_json(
         method="POST",
         headers=headers,
     )
-    with urllib.request.urlopen(req, timeout=30) as res:
-        data = json.loads(res.read())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as res:
+            data = json.loads(res.read())
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"pool HTTP {exc.code}: {body}") from exc
     if not isinstance(data, dict):
         raise RuntimeError("pool returned non-object JSON")
     return data
@@ -162,6 +171,17 @@ def complete_lease(args: argparse.Namespace, job: dict[str, Any], checked: int |
         print(f"lease_complete_warning: {exc}", file=sys.stderr)
 
 
+def lease_nonce_count(job: dict[str, Any]) -> int | None:
+    lease = job.get("lease")
+    if not isinstance(lease, dict) or "nonce_count" not in lease:
+        return None
+    try:
+        count = int(lease["nonce_count"])
+    except (TypeError, ValueError):
+        return None
+    return count if count > 0 else None
+
+
 def run_metal(args: argparse.Namespace, job: dict[str, Any], start: int) -> tuple[int, str]:
     cmd = [
         str(args.metal_bin),
@@ -188,6 +208,9 @@ def run_metal(args: argparse.Namespace, job: dict[str, Any], start: int) -> tupl
         "--inflight",
         str(args.inflight),
     ]
+    total = lease_nonce_count(job)
+    if total is not None:
+        cmd.extend(["--total", str(total)])
     proc = subprocess.run(cmd, text=True, capture_output=True)
     return proc.returncode, proc.stdout + proc.stderr
 
