@@ -8,11 +8,11 @@ $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $Root
 
 function Run-Python {
-  param([string[]]$Args)
+  param([string[]]$PythonArgs)
   if ($Python -eq "py") {
-    & py -3 @Args
+    & py -3 @PythonArgs
   } else {
-    & $Python @Args
+    & $Python @PythonArgs
   }
 }
 
