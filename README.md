@@ -44,6 +44,9 @@ cd hash256-miner
 
 Linux requires a working NVIDIA driver. If no CUDA binary is bundled for your host, the install script will compile one when `nvcc` is available.
 See [docs/LINUX.md](docs/LINUX.md) for CUDA architecture selection and multi-GPU commands.
+Linux uses the native `hash_gpu_cuda` binary. If you see a command trying to run
+`hash_gpu_cuda.exe` on Linux, pull the latest repo and rebuild with
+`./scripts/build_cuda_linux.sh`.
 
 Linux optimization helpers:
 

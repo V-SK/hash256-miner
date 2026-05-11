@@ -40,6 +40,19 @@ DEFAULT_CUDA_GROUP = 256
 DEFAULT_CUDA_STREAMS = 2
 
 
+def validate_cuda_bin(path: Path) -> None:
+    if os.name != "nt" and path.suffix.lower() == ".exe":
+        raise SystemExit(
+            f"wrong CUDA binary for Linux/macOS: {path}. "
+            "Build or download the Linux binary named hash_gpu_cuda."
+        )
+    if os.name == "nt" and path.suffix.lower() != ".exe":
+        raise SystemExit(
+            f"wrong CUDA binary for Windows: {path}. "
+            "Build or download hash_gpu_cuda.exe."
+        )
+
+
 def run_cuda(args: argparse.Namespace, job: dict[str, object], start: int) -> tuple[int, str]:
     cmd = [
         str(args.cuda_bin),
@@ -106,6 +119,7 @@ def main() -> int:
         raise SystemExit("--slice-seconds must be > 0")
     if args.batch <= 0 or args.iters <= 0 or args.group <= 0 or args.streams <= 0:
         raise SystemExit("--batch, --iters, --group, and --streams must be positive")
+    validate_cuda_bin(args.cuda_bin)
     if not args.cuda_bin.exists():
         raise SystemExit(f"missing --cuda-bin {args.cuda_bin}")
 

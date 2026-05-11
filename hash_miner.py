@@ -70,11 +70,27 @@ class DoctorResult:
 def find_cuda_bin(override: Path | None = None) -> Path | None:
     if override is not None:
         return override if override.exists() else None
-    for name in CUDA_BIN_NAMES:
+    system_l = platform.system().lower()
+    if system_l == "windows":
+        names = ["hash_gpu_cuda.exe", "hash_gpu_cuda"]
+    elif system_l == "linux":
+        names = ["hash_gpu_cuda"]
+    else:
+        names = CUDA_BIN_NAMES
+    for name in names:
         path = ROOT / name
         if path.exists():
             return path
     return None
+
+
+def wrong_platform_cuda_bins() -> list[Path]:
+    system_l = platform.system().lower()
+    if system_l == "linux":
+        return [ROOT / "hash_gpu_cuda.exe"] if (ROOT / "hash_gpu_cuda.exe").exists() else []
+    if system_l == "windows":
+        return [ROOT / "hash_gpu_cuda"] if (ROOT / "hash_gpu_cuda").exists() else []
+    return []
 
 
 def detect_cuda_gpus() -> list[CudaGpu]:
@@ -249,6 +265,7 @@ def run_doctor(args: argparse.Namespace) -> DoctorResult:
     cuda_ready = False
     cuda_bin = find_cuda_bin(args.cuda_bin)
     cuda_gpus = detect_cuda_gpus()
+    wrong_bins = wrong_platform_cuda_bins()
 
     if system_l == "darwin":
         cpu_kind = "Apple Silicon" if machine in {"arm64", "aarch64"} else "Intel"
@@ -322,6 +339,15 @@ def run_doctor(args: argparse.Namespace) -> DoctorResult:
                 checks.append(DoctorCheck("cuda_binary", "fail", f"CUDA miner is not executable: {cuda_bin}", "Run with --install-missing to chmod +x."))
         else:
             checks.append(DoctorCheck("cuda_binary", "fail", "CUDA miner binary missing: hash_gpu_cuda", "Download the Linux CUDA miner release. TODO: release URL."))
+        for wrong_bin in wrong_bins:
+            checks.append(
+                DoctorCheck(
+                    "cuda_binary_platform",
+                    "warn",
+                    f"Ignoring Windows CUDA binary on Linux: {wrong_bin}",
+                    "Run ./scripts/build_cuda_linux.sh to create ./hash_gpu_cuda, or download the Linux release binary.",
+                )
+            )
 
     # On non-CUDA macOS this is intentionally not a failure; normal users should
     # not install CUDA Toolkit, nvcc, Xcode, or VS Build Tools for mining.

@@ -23,6 +23,10 @@ cd hash256-miner
 
 If the install script cannot find `hash_gpu_cuda` and cannot find `nvcc`, install CUDA Toolkit or download a Linux release binary.
 
+Do not use the Windows `hash_gpu_cuda.exe` on Linux. Linux miners need the
+native no-extension binary named `hash_gpu_cuda`; the launcher intentionally
+ignores `.exe` files on Linux so a wrong release artifact fails early.
+
 ## Build Locally
 
 Use the CUDA arch that matches your GPU. The build script auto-detects the first NVIDIA GPU when possible:
