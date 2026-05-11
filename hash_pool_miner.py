@@ -16,6 +16,7 @@ import socket
 import subprocess
 import sys
 import time
+import random
 import urllib.parse
 import urllib.error
 import urllib.request
@@ -31,6 +32,7 @@ RECOVERABLE_SESSION_REASONS = {
     "invalid_worker_session",
     "missing_worker_session",
 }
+TRANSIENT_HTTP_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
 CHECKED_RE = re.compile(r"checked:\s+([0-9,]+)")
 RATE_RE = re.compile(r"rate:\s+([0-9,]+)\s+H/s")
 RECORD_RE = re.compile(r"^(FOUND|SHARE)$", re.MULTILINE)
@@ -57,6 +59,71 @@ class PoolHTTPError(RuntimeError):
         super().__init__(f"pool HTTP {status_code}: {body}")
 
 
+def http_max_attempts() -> int:
+    raw = os.environ.get("HASH_POOL_HTTP_MAX_ATTEMPTS", "0")
+    try:
+        attempts = int(raw)
+    except ValueError:
+        return 0
+    return max(0, attempts)
+
+
+def http_backoff_seconds() -> float:
+    raw = os.environ.get("HASH_POOL_HTTP_BACKOFF_SECONDS", "1.0")
+    try:
+        value = float(raw)
+    except ValueError:
+        return 1.0
+    return max(0.0, value)
+
+
+def http_backoff_max_seconds() -> float:
+    raw = os.environ.get("HASH_POOL_HTTP_BACKOFF_MAX_SECONDS", "30.0")
+    try:
+        value = float(raw)
+    except ValueError:
+        return 30.0
+    return max(0.0, value)
+
+
+def is_transient_http_status(status_code: int) -> bool:
+    return status_code in TRANSIENT_HTTP_STATUS_CODES
+
+
+def retry_delay(attempt_index: int, retry_after: str | None = None) -> float:
+    if retry_after:
+        try:
+            return max(0.0, min(float(retry_after), http_backoff_max_seconds()))
+        except ValueError:
+            pass
+    base = http_backoff_seconds()
+    max_delay = http_backoff_max_seconds()
+    delay = min(max_delay, base * (2 ** max(0, attempt_index - 1)))
+    if delay <= 0:
+        return 0.0
+    return delay + random.uniform(0.0, min(delay * 0.2, 1.0))
+
+
+def request_path_for_log(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    return parsed.path or url
+
+
+def log_pool_retry(method: str, url: str, reason: str, attempt: int, max_attempts: int, delay: float) -> None:
+    limit = "inf" if max_attempts == 0 else str(max_attempts)
+    print(
+        f"pool_http_retry: method={method} path={request_path_for_log(url)} "
+        f"reason={reason} attempt={attempt}/{limit} delay={delay:.2f}s",
+        file=sys.stderr,
+    )
+    sys.stderr.flush()
+
+
+def should_retry(attempt: int) -> bool:
+    max_attempts = http_max_attempts()
+    return max_attempts == 0 or attempt < max_attempts
+
+
 def auth_headers(token: str | None = None, worker_session: str | None = None) -> dict[str, str]:
     headers = {"user-agent": "hash-pool-miner/0.1"}
     if token:
@@ -66,17 +133,45 @@ def auth_headers(token: str | None = None, worker_session: str | None = None) ->
     return headers
 
 
+def request_json(
+    method: str,
+    url: str,
+    data: bytes | None = None,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    attempt = 1
+    max_attempts = http_max_attempts()
+    while True:
+        req = urllib.request.Request(url, data=data, method=method, headers=headers or {})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as res:
+                payload = json.loads(res.read())
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            if is_transient_http_status(exc.code) and should_retry(attempt):
+                delay = retry_delay(attempt, exc.headers.get("Retry-After"))
+                log_pool_retry(method, url, f"http_{exc.code}", attempt, max_attempts, delay)
+                time.sleep(delay)
+                attempt += 1
+                continue
+            raise PoolHTTPError(exc.code, body) from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            if should_retry(attempt):
+                delay = retry_delay(attempt)
+                log_pool_retry(method, url, exc.__class__.__name__, attempt, max_attempts, delay)
+                time.sleep(delay)
+                attempt += 1
+                continue
+            raise RuntimeError(f"pool transport error: {exc}") from exc
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("pool returned invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError("pool returned non-object JSON")
+        return payload
+
+
 def read_json(url: str, token: str | None = None, worker_session: str | None = None) -> dict[str, Any]:
-    req = urllib.request.Request(url, headers=auth_headers(token, worker_session))
-    try:
-        with urllib.request.urlopen(req, timeout=30) as res:
-            data = json.loads(res.read())
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise PoolHTTPError(exc.code, body) from exc
-    if not isinstance(data, dict):
-        raise RuntimeError("pool returned non-object JSON")
-    return data
+    return request_json("GET", url, headers=auth_headers(token, worker_session))
 
 
 def post_json(
@@ -88,21 +183,7 @@ def post_json(
     body = json.dumps(payload, sort_keys=True).encode()
     headers = auth_headers(token, worker_session)
     headers["content-type"] = "application/json"
-    req = urllib.request.Request(
-        url,
-        data=body,
-        method="POST",
-        headers=headers,
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as res:
-            data = json.loads(res.read())
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise PoolHTTPError(exc.code, body) from exc
-    if not isinstance(data, dict):
-        raise RuntimeError("pool returned non-object JSON")
-    return data
+    return request_json("POST", url, data=body, headers=headers)
 
 
 def is_recoverable_session_error(exc: BaseException) -> bool:
