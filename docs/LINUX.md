@@ -26,6 +26,8 @@ If the install script cannot find `hash_gpu_cuda` and cannot find `nvcc`, instal
 Do not use the Windows `hash_gpu_cuda.exe` on Linux. Linux miners need the
 native no-extension binary named `hash_gpu_cuda`; the launcher intentionally
 ignores `.exe` files on Linux so a wrong release artifact fails early.
+The Linux installer also fails early if only `hash_gpu_cuda.exe` is present or
+if neither a native `hash_gpu_cuda` nor `nvcc` is available.
 
 ## Build Locally
 

@@ -17,6 +17,12 @@ if ! command -v nvcc >/dev/null 2>&1; then
   exit 2
 fi
 
+if [[ "$OUT" == *.exe ]]; then
+  echo "Linux CUDA binaries must be named hash_gpu_cuda, not $OUT."
+  echo "Use the Windows release if you need hash_gpu_cuda.exe."
+  exit 2
+fi
+
 if [[ "$CUDA_ARCH" == "auto" ]]; then
   CUDA_ARCH="$(./scripts/detect_cuda_arch.sh)"
 fi

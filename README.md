@@ -47,6 +47,8 @@ See [docs/LINUX.md](docs/LINUX.md) for CUDA architecture selection and multi-GPU
 Linux uses the native `hash_gpu_cuda` binary. If you see a command trying to run
 `hash_gpu_cuda.exe` on Linux, pull the latest repo and rebuild with
 `./scripts/build_cuda_linux.sh`.
+The Linux installer exits non-zero until this native binary exists, so a
+Windows-only `.exe` bundle cannot be mistaken for a working Linux install.
 
 Linux optimization helpers:
 
